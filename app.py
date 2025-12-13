@@ -5,9 +5,9 @@ import os
 app = Flask(__name__)
 
 # Chatwoot credentials (set these in Render environment variables)
-CHATWOOT_ACCOUNT_ID = os.environ.get("CHATWOOT_ACCOUNT_ID")
-CHATWOOT_API_KEY = os.environ.get("CHATWOOT_API_KEY")
-CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")  # Example: https://app.chatwoot.com
+CHATWOOT_ACCOUNT_ID = os.environ.get("145049")
+CHATWOOT_API_KEY = os.environ.get("gzNKPeweS7QoCmYoVmqdJ48w")
+CHATWOOT_BASE_URL = os.environ.get("https://app.chatwoot.com")  # Example: https://app.chatwoot.com
 
 @app.route("/", methods=["POST"])
 def chatwoot_echo_bot():
