@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify
 import requests
 import os
+from collections import defaultdict
+import time
 
 app = Flask(__name__)
 
@@ -11,7 +13,6 @@ CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")
 
 # OpenRouter
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-
 AI_MODEL = "meta-llama/llama-3.1-8b-instruct"
 
 SYSTEM_PROMPT = (
@@ -26,7 +27,23 @@ SYSTEM_PROMPT = (
     "Keep replies short and casual."
 )
 
-def get_ai_reply(user_message):
+# In-memory conversation memory (username -> list of previous messages)
+conversation_memory = defaultdict(list)
+MEMORY_LIMIT = 10  # max messages to remember per user
+
+# Track last game prompt timestamp to avoid spamming
+last_game_prompt = defaultdict(lambda: 0)
+GAME_COOLDOWN = 3600  # seconds, 1 hour
+
+def get_ai_reply(user_message, memory_context=None):
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    
+    # Add memory context if available
+    if memory_context:
+        messages.append({"role": "system", "content": f"Previous conversation: {memory_context}"})
+    
+    messages.append({"role": "user", "content": user_message})
+
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -35,10 +52,7 @@ def get_ai_reply(user_message):
 
     payload = {
         "model": AI_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message}
-        ]
+        "messages": messages
     }
 
     r = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -57,17 +71,41 @@ def chatwoot_ai_bot():
 
     message = data.get("content")
     conversation = data.get("conversation")
+    contact = data.get("sender")
+    username = contact.get("name") if contact else None
 
-    if not message or not conversation:
+    if not message or not conversation or not username:
         return jsonify({"status": "ignored"}), 200
 
     conversation_id = conversation["id"]
 
-    try:
-        ai_reply = get_ai_reply(message)
-    except Exception as e:
-        print("AI ERROR:", e)
-        ai_reply = "Sorry, I didn’t get that. Could you rephrase?"
+    # Update memory
+    memory_context = ""
+    if username:
+        conversation_memory[username].append(message)
+        # Trim memory if too long
+        if len(conversation_memory[username]) > MEMORY_LIMIT:
+            conversation_memory[username] = conversation_memory[username][-MEMORY_LIMIT:]
+        memory_context = " ".join(conversation_memory[username])
+
+    # Language check: force English
+    non_english_chars = sum(1 for c in message if ord(c) > 127)
+    if non_english_chars > len(message) / 2:
+        ai_reply = "Ponnu 😅, can we talk in English? It's easier for me to understand."
+    else:
+        try:
+            ai_reply = get_ai_reply(message, memory_context)
+        except Exception as e:
+            print("AI ERROR:", e)
+            ai_reply = "Oops ponnu 😅, something went wrong, let's continue chatting!"
+
+    # Optional: if user seems sad or message contains sad words, suggest game
+    sad_keywords = ["sad", "tired", "bad", "angry", "upset"]
+    if any(word in message.lower() for word in sad_keywords):
+        now = time.time()
+        if now - last_game_prompt[username] > GAME_COOLDOWN:
+            ai_reply += " Hey ponnu, want to play a fun game to cheer up? 🎮"
+            last_game_prompt[username] = now
 
     # Send reply to Chatwoot
     url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations/{conversation_id}/messages"
