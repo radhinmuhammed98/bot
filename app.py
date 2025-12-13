@@ -28,8 +28,8 @@ SYSTEM_PROMPT = (
 
 # Allowed usernames
 ALLOWED_USERNAMES = {
-    "_radhin.og_",
-    "_.jasmmiin._",
+    "Radhin³³",
+    "jasm!n",
     "Friend2"
 }
 
