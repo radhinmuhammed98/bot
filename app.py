@@ -142,7 +142,7 @@ def chatwoot_ai_bot():
         print("AI ERROR:", e)
         ai_reply = "Hmm… something slipped there. Continue 🙂"
 
-    reply = reply_prefix + ai_reply
+    reply = ai_reply
 
     # Game offer ONLY if chat feels dead
     boredom_keywords = ["ok", "hmm", "idk", "nothing", "fine"]
