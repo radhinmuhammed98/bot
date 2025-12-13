@@ -6,43 +6,64 @@ import time
 
 app = Flask(__name__)
 
-# Chatwoot
+# =========================
+# Chatwoot Config
+# =========================
 CHATWOOT_ACCOUNT_ID = os.environ.get("CHATWOOT_ACCOUNT_ID")
 CHATWOOT_API_KEY = os.environ.get("CHATWOOT_API_KEY")
 CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")
 
-# OpenRouter
+# =========================
+# OpenRouter Config
+# =========================
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-AI_MODEL = "meta-llama/llama-3.1-8b-instruct"
 
-SYSTEM_PROMPT = (
-    "You are a friendly, playful Instagram DM assistant. "
-    "Always address the user as 'ponnu' naturally. "
-    "Tone should be chill, fun, and human-like. "
-    "Do NOT say you are an AI or bot. "
-    "If someone asks your name or who you are, say: "
-    "'I'm Radhin's personal assistant 😌'. "
-    "If someone uses slang or bad words, reply calmly and humorously. "
-    "Keep replies short and casual. English only."
-)
+# Model (better conversational tone than LLaMA 3.1 8B)
+AI_MODEL = "mistralai/mistral-7b-instruct"
 
-# Allowed usernames
+# =========================
+# Allowed Users (username lock)
+# =========================
 ALLOWED_USERNAMES = {
     "Radhin³³",
     "jasm!n",
-    "Friend2"
+    "Friend1"
 }
 
-# Memory and game tracking
+# =========================
+# Memory & State
+# =========================
 conversation_memory = defaultdict(list)
-MEMORY_LIMIT = 1000000
-last_game_prompt = defaultdict(lambda: 0)
-GAME_COOLDOWN = 3600  # seconds
+intro_sent = defaultdict(bool)
+last_game_offer = defaultdict(lambda: 0)
 
-def get_ai_reply(user_message, memory_context=None):
+GAME_COOLDOWN = 1800  # 30 minutes
+
+# =========================
+# System Prompt
+# =========================
+SYSTEM_PROMPT = (
+    "You are a calm, friendly Instagram DM assistant. "
+    "You speak natural English like a real human. "
+    "You already know the user, so avoid greetings like 'hi' repeatedly. "
+    "Never sound robotic, repetitive, or overly excited. "
+    "Do NOT say you are an AI or bot. "
+    "If asked who you are, say: 'I help Radhin manage chats.' "
+    "Respond thoughtfully, briefly, and naturally."
+)
+
+# =========================
+# AI Call
+# =========================
+def get_ai_reply(user_message, memory):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if memory_context:
-        messages.append({"role": "system", "content": f"Previous conversation: {memory_context}"})
+
+    if memory:
+        messages.append({
+            "role": "system",
+            "content": f"Conversation so far: {' '.join(memory[-20:])}"
+        })
+
     messages.append({"role": "user", "content": user_message})
 
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -52,75 +73,95 @@ def get_ai_reply(user_message, memory_context=None):
     }
     payload = {
         "model": AI_MODEL,
-        "messages": messages
+        "messages": messages,
+        "temperature": 0.7
     }
+
     r = requests.post(url, headers=headers, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
 
+# =========================
+# Webhook
+# =========================
 @app.route("/", methods=["POST"])
 def chatwoot_ai_bot():
     data = request.json
-    print("\n=== Incoming webhook ===")
+    print("\n=== WEBHOOK RECEIVED ===")
     print(data)
 
     if data.get("message_type") != "incoming":
-        return jsonify({"status": "ignored"}), 200
+        return "OK", 200
 
     message = data.get("content")
     conversation = data.get("conversation")
-    contact = data.get("sender")
-    username = contact.get("name") if contact else None
+    sender = data.get("sender")
+    username = sender.get("name") if sender else None
 
-    # USERNAME LOCK
-    if username not in ALLOWED_USERNAMES:
-        print(f"⛔ User {username} not allowed, ignoring")
-        return jsonify({"status": "ignored"}), 200
+    # Username lock
+    if not username or username not in ALLOWED_USERNAMES:
+        print(f"⛔ Blocked user: {username}")
+        return "OK", 200
 
     if not message or not conversation:
-        return jsonify({"status": "ignored"}), 200
+        return "OK", 200
 
     conversation_id = conversation["id"]
 
-    # English-only check
+    # English-only (soft)
     if any(ord(c) > 127 for c in message):
-        ai_reply = "Ponnu 😅, please write in English so I can understand better."
-    else:
-        # Update memory
-        conversation_memory[username].append(message)
-        if len(conversation_memory[username]) > MEMORY_LIMIT:
-            conversation_memory[username] = conversation_memory[username][-MEMORY_LIMIT:]
-        memory_context = " ".join(conversation_memory[username])
+        reply = "Could you type that in English? I don’t want to misunderstand 🙂"
+        send_message(conversation_id, reply)
+        return "OK", 200
 
-        try:
-            ai_reply = get_ai_reply(message, memory_context)
-        except Exception as e:
-            print("AI ERROR:", e)
-            ai_reply = "Oops ponnu 😅, something went wrong, let's continue chatting!"
+    # Store memory
+    conversation_memory[username].append(message)
 
-    # Optional game suggestion if user is sad
-    sad_keywords = ["sad", "tired", "bad", "angry", "upset"]
-    if any(word in message.lower() for word in sad_keywords):
+    # One-time soft intro
+    reply_prefix = ""
+    if not intro_sent[username]:
+        reply_prefix = f"You’re {username}, right? Radhin mentioned you once 🙂\n\n"
+        intro_sent[username] = True
+
+    # Generate AI reply
+    try:
+        ai_reply = get_ai_reply(message, conversation_memory[username])
+    except Exception as e:
+        print("AI ERROR:", e)
+        ai_reply = "Hmm… something slipped there. Continue 🙂"
+
+    reply = reply_prefix + ai_reply
+
+    # Game offer ONLY if chat feels dead
+    boredom_keywords = ["ok", "hmm", "idk", "nothing", "fine"]
+    if message.lower().strip() in boredom_keywords:
         now = time.time()
-        if now - last_game_prompt[username] > GAME_COOLDOWN:
-            ai_reply += " Hey ponnu, want to play a fun game to cheer up? 🎮"
-            last_game_prompt[username] = now
+        if now - last_game_offer[username] > GAME_COOLDOWN:
+            reply += "\n\nIf you’re bored, we can play a quick game."
+            last_game_offer[username] = now
 
-    # Send reply to Chatwoot
+    send_message(conversation_id, reply)
+    return "OK", 200
+
+# =========================
+# Send Message
+# =========================
+def send_message(conversation_id, content):
     url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations/{conversation_id}/messages"
     headers = {"api_access_token": CHATWOOT_API_KEY}
     payload = {
-        "content": ai_reply,
+        "content": content,
         "message_type": "outgoing"
     }
-    res = requests.post(url, headers=headers, json=payload)
-    print("Chatwoot response:", res.status_code, res.text)
+    r = requests.post(url, headers=headers, json=payload)
+    print("Sent:", r.status_code)
 
-    return jsonify({"status": "ok"}), 200
-
+# =========================
+# Health
+# =========================
 @app.route("/", methods=["GET"])
 def health():
-    return "AI Bot is running 🚀"
+    return "Bot alive 🚀"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
