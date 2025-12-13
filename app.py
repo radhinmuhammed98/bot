@@ -19,7 +19,7 @@ CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 # Model (better conversational tone than LLaMA 3.1 8B)
-AI_MODEL = "deepcogito/cogito-v2-preview-deepseek-671b"
+AI_MODEL = "meta-llama/llama-3.1-13b-chat"
 
 # =========================
 # Allowed Users (username lock)
