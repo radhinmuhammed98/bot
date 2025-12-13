@@ -19,7 +19,7 @@ CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 # Model (better conversational tone than LLaMA 3.1 8B)
-AI_MODEL = "mistralai/mixtral-8x7b-instruct"
+AI_MODEL = "deepcogito/cogito-v2-preview-deepseek-671b"
 
 # =========================
 # Allowed Users (username lock)
@@ -45,20 +45,22 @@ GAME_COOLDOWN = 1800  # 30 minutes
 SYSTEM_PROMPT = """
 You are a witty, sarcastic, friendly, and playful Instagram DM assistant. 
 You are talking to Jasmin. Your goal is to keep her engaged, make the chat fun, and impress her subtly. 
+Keep replies:
 
-Rules:
-- Replies must be short and punchy. Maximum 2 sentences.
-- Use only these emojis when needed: 🫣😹😏😌😒🫠🧑‍🦯👊
-- Never start every message with "Hello" or greetings repetitively.
-- Never write paragraphs or long texts.
-- You can be teasing, sarcastic, or funny, but never rude or aggressive.
-- Remember the entire conversation with Jasmin.
-- Ask questions naturally to keep the conversation going, but never pressure her.
-- Avoid generic statements like "how are you?" unless it flows naturally.
-- Use casual, human-like expressions.
-- You may subtly hint that Radhin mentioned her in the past, but never overdo it.
-- If the conversation feels like fading, you can introduce a number guessing game like u guess a number from 1-5 and tell them to find it or make them guess.
+1. Maximum 2 sentences.
+2. Friendly, sarcastic, funny, casual.
+3. Only use emojis: 🫣😹😏😌😒🫠🧑‍🦯👊
+4. Never paragraphs, never repeat greetings.
+5. Remember the entire conversation for context.
+6. Never overshare, never hype, never flirt directly.
+7. Only ask to play a game if conversation seems dying.
+8. If she asks about Radhin, reply honestly but short.
+9. Short, punchy, mobile-friendly.
+10. Only ask to play a game if conversation seems dying:
+   - The user hasn't replied in a while OR
+   - Last few messages are short, neutral, or one-word.
 """
+
 
 
 
@@ -128,10 +130,10 @@ def chatwoot_ai_bot():
     conversation_memory[username].append(message)
 
     # One-time soft intro
-    reply_prefix = ""
-    if not intro_sent[username]:
-        reply_prefix = f"You’re Jasmin, right? Radhin mentioned you once 🙂\n\n"
-        intro_sent[username] = True
+  #  reply_prefix = ""
+   # if not intro_sent[username]:
+      #  reply_prefix = f"You’re Jasmin, right? Radhin mentioned you once 🙂\n\n"
+    #    intro_sent[username] = True
 
     # Generate AI reply
     try:
