@@ -4,6 +4,12 @@ import requests
 import random
 from collections import defaultdict, deque
 
+ALLOWED_CONTACT_IDS = {
+    598323826,   # Radhin
+    123456789,   # Friend 1
+    987654321,   # Friend 2
+}
+
 app = Flask(__name__)
 
 # =========================
@@ -149,6 +155,16 @@ def webhook():
 
     conversation_id = data["conversation"]["id"]
 
+    # =========================
+    # CONTACT RESTRICTION
+    # =========================
+    contact_id = data.get("sender", {}).get("id")
+    print("CONTACT ID:", contact_id)
+
+    if contact_id not in ALLOWED_CONTACT_IDS:
+        print("⛔ User not allowed, ignoring")
+        return "OK", 200
+        
     # Handle text / replies / attachments
     message = data.get("content")
     if not message:
