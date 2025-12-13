@@ -17,31 +17,32 @@ AI_MODEL = "meta-llama/llama-3.1-8b-instruct"
 
 SYSTEM_PROMPT = (
     "You are a friendly, playful Instagram DM assistant. "
-    "Always address the user as 'ponnu' naturally (like Malayali style). "
-    "Your tone should be chill, fun, and human-like. "
+    "Always address the user as 'ponnu' naturally. "
+    "Tone should be chill, fun, and human-like. "
     "Do NOT say you are an AI or bot. "
     "If someone asks your name or who you are, say: "
     "'I'm Radhin's personal assistant 😌'. "
-    "If someone uses slang or bad words, reply calmly and humorously, "
-    "not aggressively or judgmentally. "
-    "Keep replies short and casual."
+    "If someone uses slang or bad words, reply calmly and humorously. "
+    "Keep replies short and casual. English only."
 )
 
-# In-memory conversation memory (username -> list of previous messages)
-conversation_memory = defaultdict(list)
-MEMORY_LIMIT = 10  # max messages to remember per user
+# Allowed usernames
+ALLOWED_USERNAMES = {
+    "_radhin.og_",
+    "_.jasmmiin._",
+    "Friend2"
+}
 
-# Track last game prompt timestamp to avoid spamming
+# Memory and game tracking
+conversation_memory = defaultdict(list)
+MEMORY_LIMIT = 1000000
 last_game_prompt = defaultdict(lambda: 0)
-GAME_COOLDOWN = 3600  # seconds, 1 hour
+GAME_COOLDOWN = 3600  # seconds
 
 def get_ai_reply(user_message, memory_context=None):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    
-    # Add memory context if available
     if memory_context:
         messages.append({"role": "system", "content": f"Previous conversation: {memory_context}"})
-    
     messages.append({"role": "user", "content": user_message})
 
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -49,12 +50,10 @@ def get_ai_reply(user_message, memory_context=None):
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
-
     payload = {
         "model": AI_MODEL,
         "messages": messages
     }
-
     r = requests.post(url, headers=headers, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
@@ -65,7 +64,6 @@ def chatwoot_ai_bot():
     print("\n=== Incoming webhook ===")
     print(data)
 
-    # Ignore non-incoming / bot messages
     if data.get("message_type") != "incoming":
         return jsonify({"status": "ignored"}), 200
 
@@ -74,32 +72,33 @@ def chatwoot_ai_bot():
     contact = data.get("sender")
     username = contact.get("name") if contact else None
 
-    if not message or not conversation or not username:
+    # USERNAME LOCK
+    if username not in ALLOWED_USERNAMES:
+        print(f"⛔ User {username} not allowed, ignoring")
+        return jsonify({"status": "ignored"}), 200
+
+    if not message or not conversation:
         return jsonify({"status": "ignored"}), 200
 
     conversation_id = conversation["id"]
 
-    # Update memory
-    memory_context = ""
-    if username:
+    # English-only check
+    if any(ord(c) > 127 for c in message):
+        ai_reply = "Ponnu 😅, please write in English so I can understand better."
+    else:
+        # Update memory
         conversation_memory[username].append(message)
-        # Trim memory if too long
         if len(conversation_memory[username]) > MEMORY_LIMIT:
             conversation_memory[username] = conversation_memory[username][-MEMORY_LIMIT:]
         memory_context = " ".join(conversation_memory[username])
 
-    # Language check: force English
-    non_english_chars = sum(1 for c in message if ord(c) > 127)
-    if non_english_chars > len(message) / 2:
-        ai_reply = "Ponnu 😅, can we talk in English? It's easier for me to understand."
-    else:
         try:
             ai_reply = get_ai_reply(message, memory_context)
         except Exception as e:
             print("AI ERROR:", e)
             ai_reply = "Oops ponnu 😅, something went wrong, let's continue chatting!"
 
-    # Optional: if user seems sad or message contains sad words, suggest game
+    # Optional game suggestion if user is sad
     sad_keywords = ["sad", "tired", "bad", "angry", "upset"]
     if any(word in message.lower() for word in sad_keywords):
         now = time.time()
@@ -114,7 +113,6 @@ def chatwoot_ai_bot():
         "content": ai_reply,
         "message_type": "outgoing"
     }
-
     res = requests.post(url, headers=headers, json=payload)
     print("Chatwoot response:", res.status_code, res.text)
 
