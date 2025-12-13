@@ -1,86 +1,185 @@
 from flask import Flask, request, jsonify
-import requests
 import os
+import random
+import requests
 
 app = Flask(__name__)
 
-# Chatwoot
+# ======================
+# ENV VARIABLES (SET IN RENDER DASHBOARD)
+# ======================
 CHATWOOT_ACCOUNT_ID = os.environ.get("CHATWOOT_ACCOUNT_ID")
 CHATWOOT_API_KEY = os.environ.get("CHATWOOT_API_KEY")
-CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")
-
-# OpenRouter
+CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")  # https://app.chatwoot.com
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
-AI_MODEL = "meta-llama/llama-3.1-8b-instruct"
-
+# ======================
+# FUN SYSTEM PROMPT
+# ======================
 SYSTEM_PROMPT = (
-    "You are a helpful and friendly Instagram DM assistant. "
-    "Reply briefly and clearly. "
-    "Do not mention that you are an AI. "
-    "If a question is unclear, ask politely for clarification."
+    "You are a friendly, playful Instagram DM assistant. "
+    "Always call the user 'ponnu'. "
+    "Speak casually like a Malayali friend. "
+    "Never say you are an AI or bot. "
+    "If asked who you are, say: I'm Radhin's personal assistant 😌. "
+    "If confused, smoothly suggest playing a game. "
+    "Keep replies short, fun, and human."
 )
 
-def get_ai_reply(user_message):
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
+# ======================
+# BAD WORD HANDLING
+# ======================
+BAD_WORDS = ["kundi", "kundii", "ass", "fuck", "shit", "myre", "myr", "punda"]
 
-    payload = {
-        "model": AI_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message}
-        ]
-    }
+def handle_bad_words(msg):
+    msg = msg.lower()
+    for w in BAD_WORDS:
+        if w in msg:
+            return "Hehe ponnu 😄 kundi means ass in Malayalam alle? Chill da 😌"
+    return None
 
-    r = requests.post(url, headers=headers, json=payload, timeout=30)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+# ======================
+# GAME DETECTION
+# ======================
+GAME_TRIGGERS = [
+    "play", "game", "kalikkam", "kalikk", "bore",
+    "boring", "entha cheyyam", "oru game", "lets play"
+]
 
-@app.route("/", methods=["POST"])
-def chatwoot_ai_bot():
-    data = request.json
-    print("\n=== Incoming webhook ===")
-    print(data)
+def wants_game(msg):
+    msg = msg.lower()
+    return any(t in msg for t in GAME_TRIGGERS)
 
-    # Ignore non-incoming / bot messages
-    if data.get("message_type") != "incoming":
-        return jsonify({"status": "ignored"}), 200
+# ======================
+# GAMES
+# ======================
+def start_game():
+    game = random.choice(["guess", "emoji", "tod"])
+    if game == "guess":
+        return (
+            "Ok ponnu 😌 game time 🎮\n\n"
+            "I'm thinking of a number between 1 and 5 👀\n"
+            "Guess cheyyu!"
+        )
+    elif game == "emoji":
+        return (
+            "Emoji game kalikkam ponnu 😏\n\n"
+            "🍋 + 🍬 = ?"
+        )
+    else:
+        return (
+            "Ok ponnu 😌 Truth or Dare?\n\n"
+            "Truth 😇 or Dare 😈 ?"
+        )
 
-    message = data.get("content")
-    conversation = data.get("conversation")
+def play_games(msg):
+    if "3" in msg:
+        return "Ayy correct ponnu 😌🔥 njan 3 aanu vicharichathu!"
+    if "lemonade" in msg or "juice" in msg:
+        return "Correct ponnu 😌🍹 lemonade!"
+    return None
 
-    if not message or not conversation:
-        return jsonify({"status": "ignored"}), 200
-
-    conversation_id = conversation["id"]
-
+# ======================
+# AI RESPONSE (OPENROUTER)
+# ======================
+def get_ai_reply(user_msg):
     try:
-        ai_reply = get_ai_reply(message)
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "mistralai/mistral-7b-instruct",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg}
+                ]
+            },
+            timeout=20
+        )
+        return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
         print("AI ERROR:", e)
-        ai_reply = "Sorry, I didn’t get that. Could you rephrase?"
+        return "Hmm ponnu 🤔 game kalikkam alle?"
 
-    # Send reply to Chatwoot
+def ai_confused(reply):
+    triggers = ["not sure", "don't know", "confused", "can't understand"]
+    return any(t in reply.lower() for t in triggers)
+
+# ======================
+# SEND MESSAGE TO CHATWOOT
+# ======================
+def send_message(conversation_id, text):
     url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations/{conversation_id}/messages"
-    headers = {"api_access_token": CHATWOOT_API_KEY}
+    headers = {
+        "api_access_token": CHATWOOT_API_KEY,
+        "Content-Type": "application/json"
+    }
     payload = {
-        "content": ai_reply,
+        "content": text,
         "message_type": "outgoing"
     }
+    r = requests.post(url, headers=headers, json=payload)
+    print("SEND STATUS:", r.status_code)
 
-    res = requests.post(url, headers=headers, json=payload)
-    print("Chatwoot response:", res.status_code, res.text)
+# ======================
+# WEBHOOK
+# ======================
+@app.route("/", methods=["POST"])
+def webhook():
+    data = request.json
+    print("\n=== WEBHOOK RECEIVED ===")
+    print(data)
 
-    return jsonify({"status": "ok"}), 200
+    if data.get("event") != "message_created":
+        print("Ignoring non-message event")
+        return "OK", 200
 
+    if data.get("message_type") != "incoming":
+        print("Ignoring outgoing message")
+        return "OK", 200
+
+    message = data.get("content", "")
+    conversation_id = data["conversation"]["id"]
+
+    print("Incoming message:", message)
+
+    # 1️⃣ Bad words
+    reply = handle_bad_words(message)
+
+    # 2️⃣ User wants game
+    if not reply and wants_game(message):
+        reply = start_game()
+
+    # 3️⃣ Game response
+    if not reply:
+        game_reply = play_games(message)
+        if game_reply:
+            reply = game_reply
+
+    # 4️⃣ AI reply
+    if not reply:
+        reply = get_ai_reply(message)
+
+        # 5️⃣ AI confused → game
+        if ai_confused(reply):
+            reply = start_game()
+
+    send_message(conversation_id, reply)
+    return "OK", 200
+
+# ======================
+# HEALTH CHECK
+# ======================
 @app.route("/", methods=["GET"])
 def health():
-    return "AI Bot is running 🚀"
+    return "Bot alive ponnu 😌"
 
+# ======================
+# RUN
+# ======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
