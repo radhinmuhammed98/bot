@@ -38,7 +38,7 @@ def chatwoot_echo_bot():
     url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations/{conversation_id}/messages"
     headers = {"api_access_token": CHATWOOT_API_KEY}
     payload = {
-        "content": f"Echo 🤖: {message_content}",
+        "content": f" {message_content}",
         "message_type": "outgoing"
     }
 
