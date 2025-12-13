@@ -1,224 +1,143 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import os
-import requests
 import random
 from collections import defaultdict, deque
+import openai  # assuming you use OpenAI API for AI responses
 
+# =========================
+# CONFIGURATION
+# =========================
 ALLOWED_CONTACT_IDS = {
-    598323826,   # Radhin
-    123456789,   # Friend 1
-    987654321,   # Friend 2
+    17849491164062639,   # Radhin
+    17842619055463689,   # Friend 1
+    17848297094995525,   # Friend 2
 }
 
-app = Flask(__name__)
-
-# =========================
-# ENV VARIABLES (SET IN RENDER)
-# =========================
 CHATWOOT_ACCOUNT_ID = os.environ.get("CHATWOOT_ACCOUNT_ID")
 CHATWOOT_API_KEY = os.environ.get("CHATWOOT_API_KEY")
-CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")  # https://app.chatwoot.com
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")  # Example: https://app.chatwoot.com
+
+openai.api_key = os.environ.get("OPENAI_API_KEY")  # put your key here
 
 # =========================
-# MEMORY (PER CONVERSATION)
+# MEMORY: Store last few messages per contact
 # =========================
 conversation_memory = defaultdict(lambda: deque(maxlen=10))
 
-# =========================
-# SYSTEM PROMPT
-# =========================
-SYSTEM_PROMPT = (
-    "You are a friendly, playful Instagram DM assistant. "
-    "Always call the user 'ponnu'. "
-    "Talk casually like a Malayali friend. "
-    "Never say you are an AI or bot. "
-    "If asked who you are, say: I'm Radhin's personal assistant 😌. "
-    "If confused, suggest playing a game. "
-    "Keep replies short and fun."
-)
+app = Flask(__name__)
 
-# =========================
-# BAD WORD HANDLING
-# =========================
-BAD_WORDS = ["kundi", "kundii", "ass", "fuck", "shit", "myre", "myr", "punda"]
-
-def handle_bad_words(text):
-    text = text.lower()
-    for w in BAD_WORDS:
-        if w in text:
-            return "Hehe ponnu 😄 kundi means ass in Malayalam alle? Chill da 😌"
-    return None
-
-# =========================
-# GAME DETECTION
-# =========================
-GAME_TRIGGERS = [
-    "play", "game", "kalikkam", "kalikk",
-    "bore", "boring", "oru game", "lets play",
-    "entha cheyyam"
-]
-
-def wants_game(text):
-    text = text.lower()
-    return any(t in text for t in GAME_TRIGGERS)
-
-# =========================
-# GAMES
-# =========================
-def start_game():
-    game = random.choice(["guess", "emoji", "tod"])
-    if game == "guess":
-        return (
-            "Ok ponnu 😌 game time 🎮\n"
-            "I'm thinking of a number between 1 and 5 👀\n"
-            "Guess cheyyu!"
-        )
-    elif game == "emoji":
-        return (
-            "Emoji game kalikkam ponnu 😏\n\n"
-            "🍋 + 🍬 = ?"
-        )
-    else:
-        return "Ok ponnu 😌 Truth or Dare?\nTruth 😇 or Dare 😈 ?"
-
-def play_game(text):
-    if "3" in text:
-        return "Ayy correct ponnu 😌🔥 njan 3 aanu vicharichathu!"
-    if "lemonade" in text or "juice" in text:
-        return "Correct ponnu 😌🍹 lemonade!"
-    return None
-
-# =========================
-# AI WITH MEMORY
-# =========================
-def get_ai_reply(conversation_id):
-    try:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        messages.extend(conversation_memory[conversation_id])
-
-        r = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "mistralai/mistral-7b-instruct",
-                "messages": messages
-            },
-            timeout=20
-        )
-
-        reply = r.json()["choices"][0]["message"]["content"]
-        return reply
-
-    except Exception as e:
-        print("AI ERROR:", e)
-        return "Hmm ponnu 🤔 game kalikkam alle?"
-
-def ai_confused(text):
-    triggers = ["not sure", "don't know", "confused", "can't understand"]
-    return any(t in text.lower() for t in triggers)
-
-# =========================
-# SEND MESSAGE TO CHATWOOT
-# =========================
-def send_message(conversation_id, text):
+# -------------------------
+# HELPER FUNCTION: Send reply
+# -------------------------
+def send_message(conversation_id, content):
     url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations/{conversation_id}/messages"
-    headers = {
-        "api_access_token": CHATWOOT_API_KEY,
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "content": text,
-        "message_type": "outgoing"
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    print("SEND STATUS:", r.status_code)
+    headers = {"api_access_token": CHATWOOT_API_KEY}
+    payload = {"content": content, "message_type": 1}  # 1 = outgoing
+    try:
+        resp = requests.post(url, json=payload, headers=headers)
+        print(f"Message sent, status: {resp.status_code}")
+    except Exception as e:
+        print("Error sending message:", e)
 
-# =========================
+
+# -------------------------
 # WEBHOOK
-# =========================
+# -------------------------
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
     print("\n=== WEBHOOK RECEIVED ===")
     print(data)
 
-    # Only message events
-    if data.get("event") != "message_created":
-        return "OK", 200
-
-    if data.get("message_type") != "incoming":
+    # Only handle incoming messages
+    if data.get("event") != "message_created" or data.get("message_type") != "incoming":
         return "OK", 200
 
     conversation_id = data["conversation"]["id"]
-
-    # =========================
-    # CONTACT RESTRICTION
-    # =========================
     contact_id = data.get("sender", {}).get("id")
     print("CONTACT ID:", contact_id)
 
+    # Allowlist check
     if contact_id not in ALLOWED_CONTACT_IDS:
         print("⛔ User not allowed, ignoring")
         return "OK", 200
-        
-    # Handle text / replies / attachments
-    message = data.get("content")
-    if not message:
-        if data.get("attachments"):
-            message = "User sent an attachment"
-        else:
-            message = "User replied to a message"
 
+    # Get user message
+    message = data.get("content") or "User sent an attachment or reply"
     print("USER MESSAGE:", message)
 
-    # Save user message to memory
-    conversation_memory[conversation_id].append(
-        {"role": "user", "content": message}
-    )
+    # Store message in memory
+    conversation_memory[contact_id].append({"role": "user", "content": message})
 
-    reply = None
+    # Decide response
+    response = generate_response(contact_id, message)
 
-    # 1️⃣ Bad words
-    reply = handle_bad_words(message)
+    # Store bot response in memory
+    conversation_memory[contact_id].append({"role": "assistant", "content": response})
 
-    # 2️⃣ User wants game
-    if not reply and wants_game(message):
-        reply = start_game()
+    # Send response
+    send_message(conversation_id, response)
 
-    # 3️⃣ Playing game
-    if not reply:
-        game_reply = play_game(message.lower())
-        if game_reply:
-            reply = game_reply
-
-    # 4️⃣ AI response
-    if not reply:
-        reply = get_ai_reply(conversation_id)
-        if ai_confused(reply):
-            reply = start_game()
-
-    # Save bot reply to memory
-    conversation_memory[conversation_id].append(
-        {"role": "assistant", "content": reply}
-    )
-
-    send_message(conversation_id, reply)
     return "OK", 200
 
-# =========================
-# HEALTH CHECK
-# =========================
+
+# -------------------------
+# AI RESPONSE GENERATOR
+# -------------------------
+def generate_response(contact_id, message):
+    """
+    Generate thoughtful, friendly replies.
+    Use 'ponnu' carefully.
+    Only play game if user explicitly asks.
+    """
+
+    # Detect explicit game request
+    if any(word in message.lower() for word in ["game", "kalikkaan", "play"]):
+        return "Sure ponnu 😌, let's play! Which game do you want to start?"
+
+    # Detect bad words / friendly handling
+    if any(word in message.lower() for word in ["kundi"]):
+        return "Haha ponnu 😎, don't worry! I know what you mean 😅"
+
+    # Bot introduction
+    if "your name" in message.lower() or "who are you" in message.lower():
+        return "I'm your personal assistant ponnu, here to help and chat with you 😌"
+
+    # Use AI for thoughtful replies
+    try:
+        memory_list = list(conversation_memory[contact_id])
+        # Construct prompt
+        prompt = "You are a friendly, thoughtful assistant. Use 'ponnu' naturally. Reply to the user message logically and kindly.\n\n"
+        for msg in memory_list:
+            role = msg["role"]
+            content = msg["content"]
+            prompt += f"{role}: {content}\n"
+        prompt += "assistant:"
+
+        # Call OpenAI API (GPT)
+        ai_resp = openai.Completion.create(
+            engine="text-davinci-003",
+            prompt=prompt,
+            max_tokens=100,
+            temperature=0.7
+        )
+        reply = ai_resp.choices[0].text.strip()
+        return reply or "Hmm ponnu 😌, I need a moment to think about that..."
+    except Exception as e:
+        print("Error in AI response:", e)
+        return "Oops ponnu 😅, something went wrong, let's continue chatting!"
+        
+
+# -------------------------
+# Health check
+# -------------------------
 @app.route("/", methods=["GET"])
 def health():
-    return "Bot alive ponnu 😌"
+    return "Bot is alive 🚀"
 
-# =========================
+# -------------------------
 # RUN
-# =========================
+# -------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
