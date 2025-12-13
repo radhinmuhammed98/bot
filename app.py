@@ -6,10 +6,10 @@ from collections import defaultdict, deque
 # =========================
 # CONFIGURATION
 # =========================
-ALLOWED_CONTACT_IDS = {
-    17849491164062639,   # Radhin,   # Radhin
-    17842619055463689,   # Friend 1
-    17848297094995525,   # Friend 2
+ALLOWED_USERNAMES = {
+    "_radhin.og_",         # Radhin
+    "_.jasmmiin._",    # Friend 1
+    "friend2_username",    # Friend 2
 }
 
 CHATWOOT_ACCOUNT_ID = os.environ.get("CHATWOOT_ACCOUNT_ID")
@@ -42,7 +42,7 @@ def send_message(conversation_id, content):
 # -------------------------
 # AI RESPONSE GENERATOR using OpenRouter LLaMA
 # -------------------------
-def generate_response(contact_id, message):
+def generate_response(username, message):
     """
     Friendly, thoughtful replies using OpenRouter LLaMA.
     Only plays game if user explicitly asks.
@@ -62,7 +62,7 @@ def generate_response(contact_id, message):
 
     # Construct messages for LLaMA
     try:
-        memory_list = list(conversation_memory[contact_id])
+        memory_list = list(conversation_memory[username])
         messages = [{"role": m["role"], "content": m["content"]} for m in memory_list]
         messages.append({"role": "user", "content": message})
 
@@ -96,11 +96,15 @@ def webhook():
         return "OK", 200
 
     conversation_id = data["conversation"]["id"]
-    contact_id = data.get("sender", {}).get("id")
-    print("CONTACT ID:", contact_id)
+
+    # Get username
+    username = data.get("sender", {}).get("additional_attributes", {}) \
+                   .get("social_profiles", {}) \
+                   .get("instagram")
+    print("USERNAME:", username)
 
     # Restrict access
-    if contact_id not in ALLOWED_CONTACT_IDS:
+    if username not in ALLOWED_USERNAMES:
         print("⛔ User not allowed, ignoring")
         return "OK", 200
 
@@ -115,13 +119,13 @@ def webhook():
     print("USER MESSAGE:", message)
 
     # Store message in memory
-    conversation_memory[contact_id].append({"role": "user", "content": message})
+    conversation_memory[username].append({"role": "user", "content": message})
 
     # Generate response
-    response = generate_response(contact_id, message)
+    response = generate_response(username, message)
 
     # Store bot response in memory
-    conversation_memory[contact_id].append({"role": "assistant", "content": response})
+    conversation_memory[username].append({"role": "assistant", "content": response})
 
     # Send reply
     send_message(conversation_id, response)
