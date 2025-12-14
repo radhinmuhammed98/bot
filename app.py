@@ -1,8 +1,9 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request
 import requests
 import os
-from collections import defaultdict
+from collections import defaultdict, deque
 import time
+import random
 
 app = Flask(__name__)
 
@@ -18,83 +19,100 @@ CHATWOOT_BASE_URL = os.environ.get("CHATWOOT_BASE_URL")
 # =========================
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
-# Model (better conversational tone than LLaMA 3.1 8B)
-AI_MODEL = "meta-llama/Llama-3.1-8b-instruct"
+PRIMARY_MODEL = "meta-llama/Llama-3.1-8b-instruct"
+FALLBACK_MODEL = "deepseek/deepseek-chat"
 
 # =========================
-# Allowed Users (username lock)
+# Allowed Users
 # =========================
-ALLOWED_USERNAMES = {
-    "Radhin³³",
-    "jasm!n",
-    "Friend1"
-}
+ALLOWED_USERNAMES = {"Radhin³³", "jasm!..n", "radhin"}
 
 # =========================
-# Memory & State
+# Memory & State (PRUNED)
 # =========================
-conversation_memory = defaultdict(list)
-intro_sent = defaultdict(bool)
+conversation_memory = defaultdict(lambda: deque(maxlen=12))
 last_game_offer = defaultdict(lambda: 0)
+active_games = {}
 
-GAME_COOLDOWN = 1800  # 30 minutes
+GAME_COOLDOWN = 1800
 
 # =========================
 # System Prompt
 # =========================
 SYSTEM_PROMPT = """
-You are a witty, sarcastic, friendly, and playful Instagram DM assistant talking to Jasmin. 
-Your goal is to keep her engaged, make the chat fun, and impress her subtly. 
+You are a playful, witty, mildly flirty Instagram DM assistant talking to jasmin.
+Tone: confident, teasing, friendly, sarcastic — never desperate.
 
-Rules for replies:
-1. Maximum 2 sentences.
-2. Friendly, sarcastic, funny, casual tone.
-3. Only use these emojis: 🫣😹😏😌😒🫠🧑‍🦯👊
-4. Never write paragraphs, never repeat greetings.
-5. Remember the conversation context for continuity.
-6. Never overshare, hype, flirt directly, or sound robotic.
-7. Only ask to play a game if the chat seems dead:
-   - User hasn’t replied in a while OR
-   - Last few messages are short, neutral, or one-word.
-8. If she asks about Radhin, reply honestly but short.
-9. Keep replies mobile-friendly and punchy.
-10. Let the user lead the conversation, don’t push questions.
-11. Her name is jasmin and you should greet her
-12. you should use her name in every perfectly possible places
+Rules:
+1. Max 2 short sentences.
+2. Use jasmin’s name naturally when possible.
+3. Flirting must be indirect and playful.
+4. No paragraphs, no robotic tone.
+5. Use only emojis: 🫣😹😏😌😒🫠🧑‍🦯👊
+6. Understand misspellings, slang, and mixed languages.
+7. If the message is Malayalam or mixed Malayalam-English, understand it but reply in English.
+8. Only suggest games if chat feels dry.
+9. Keep replies mobile-friendly and human.
 """
 
-
-
-
-
 # =========================
-# AI Call
+# AI Call (with fallback)
 # =========================
-def get_ai_reply(user_message, memory):
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    if memory:
-        messages.append({
-            "role": "system",
-            "content": f"Conversation so far: {' '.join(memory[-20:])}"
-        })
-
-    messages.append({"role": "user", "content": user_message})
-
+def call_model(model, messages):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": AI_MODEL,
+        "model": model,
         "messages": messages,
         "temperature": 0.7
     }
-
     r = requests.post(url, headers=headers, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
+
+
+def get_ai_reply(user_message, memory):
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    if memory:
+        messages.append({
+            "role": "system",
+            "content": "Conversation summary: " + " | ".join(memory)
+        })
+
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        return call_model(PRIMARY_MODEL, messages)
+    except Exception:
+        return call_model(FALLBACK_MODEL, messages)
+
+# =========================
+# Games
+# =========================
+def start_number_game(username):
+    number = random.randint(1, 10)
+    active_games[username] = number
+    return "Alright jasmin, guess a number between 1 and 10 😏"
+
+
+def handle_number_game(username, message):
+    try:
+        guess = int(message.strip())
+    except ValueError:
+        return "Just a number, jasmin 😹"
+
+    number = active_games.get(username)
+    if guess == number:
+        del active_games[username]
+        return "Correct… okay that was impressive 😌👊"
+    elif guess < number:
+        return "Too low, jasmin 😏"
+    else:
+        return "Too high… confidence though 😹"
 
 # =========================
 # Webhook
@@ -102,20 +120,16 @@ def get_ai_reply(user_message, memory):
 @app.route("/", methods=["POST"])
 def chatwoot_ai_bot():
     data = request.json
-    print("\n=== WEBHOOK RECEIVED ===")
-    print(data)
 
     if data.get("message_type") != "incoming":
         return "OK", 200
 
-    message = data.get("content")
+    message = data.get("content", "").strip()
     conversation = data.get("conversation")
     sender = data.get("sender")
     username = sender.get("name") if sender else None
 
-    # Username lock
     if not username or username not in ALLOWED_USERNAMES:
-        print(f"⛔ Blocked user: {username}")
         return "OK", 200
 
     if not message or not conversation:
@@ -123,37 +137,32 @@ def chatwoot_ai_bot():
 
     conversation_id = conversation["id"]
 
-    # English-only (soft)
-    if any(ord(c) > 127 for c in message):
-        reply = "Could you type that in English? I don’t want to misunderstand 🙂"
-        send_message(conversation_id, reply)
-        return "OK", 200
-
     # Store memory
     conversation_memory[username].append(message)
 
-    # One-time soft intro
-  #  reply_prefix = ""
-   # if not intro_sent[username]:
-      #  reply_prefix = f"You’re Jasmin, right? Radhin mentioned you once 🙂\n\n"
-    #    intro_sent[username] = True
+    # Active game handling
+    if username in active_games:
+        reply = handle_number_game(username, message)
+        send_message(conversation_id, reply)
+        return "OK", 200
 
-    # Generate AI reply
+    # Generate reply
     try:
-        ai_reply = get_ai_reply(message, conversation_memory[username])
-    except Exception as e:
-        print("AI ERROR:", e)
-        ai_reply = "Hmm… something slipped there. Continue 🙂"
+        reply = get_ai_reply(message, conversation_memory[username])
+    except Exception:
+        reply = "Something slipped there… continue 😌"
 
-    reply = ai_reply
+    # Smart boredom detection
+    boring_inputs = {"ok", "hmm", "idk", "lol", "fine", "🙂"}
+    now = time.time()
 
-    # Game offer ONLY if chat feels dead
-    boredom_keywords = ["ok", "hmm", "idk", "nothing", "fine"]
-    if message.lower().strip() in boredom_keywords:
-        now = time.time()
-        if now - last_game_offer[username] > GAME_COOLDOWN:
-            reply += "\n\nIf you’re bored, we can play a quick game."
-            last_game_offer[username] = now
+    if message.lower() in boring_inputs and now - last_game_offer[username] > GAME_COOLDOWN:
+        reply += "\n\nWanna play a quick guessing game, jasmin? 😏"
+        last_game_offer[username] = now
+
+    # Start game trigger
+    if "guess" in message.lower() and now - last_game_offer[username] < 60:
+        reply = start_number_game(username)
 
     send_message(conversation_id, reply)
     return "OK", 200
@@ -164,12 +173,8 @@ def chatwoot_ai_bot():
 def send_message(conversation_id, content):
     url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations/{conversation_id}/messages"
     headers = {"api_access_token": CHATWOOT_API_KEY}
-    payload = {
-        "content": content,
-        "message_type": "outgoing"
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    print("Sent:", r.status_code)
+    payload = {"content": content, "message_type": "outgoing"}
+    requests.post(url, headers=headers, json=payload)
 
 # =========================
 # Health
