@@ -1,9 +1,9 @@
 from flask import Flask, request
 import requests
 import os
-from collections import defaultdict, deque
 import time
 import random
+from collections import defaultdict, deque
 
 app = Flask(__name__)
 
@@ -25,40 +25,47 @@ FALLBACK_MODEL = "deepseek/deepseek-chat"
 # =========================
 # Allowed Users
 # =========================
-ALLOWED_USERNAMES = {"Radhin³³", "jasm!..n", "radhin"}
+ALLOWED_USERNAMES = {"Radhin³³", "jasm!n"}
 
 # =========================
-# Memory & State (PRUNED)
+# Memory & State
 # =========================
 conversation_memory = defaultdict(lambda: deque(maxlen=12))
-last_game_offer = defaultdict(lambda: 0)
-active_games = {}
+last_game_offer = defaultdict(int)
+active_games = {}  # username -> number
+personality_level = defaultdict(int)  # flirt intensity
 
-GAME_COOLDOWN = 1800
+GAME_COOLDOWN = 1800  # 30 min
 
 # =========================
-# System Prompt
+# SYSTEM PROMPT
 # =========================
 SYSTEM_PROMPT = """
-You are a playful, witty, mildly flirty Instagram DM assistant talking to jasmin.
-Tone: confident, teasing, friendly, sarcastic — never desperate.
+You are a witty, flirty, sarcastic Instagram DM assistant chatting with Abhinav.
+
+Personality:
+- Confident, teasing, playful 😏
+- Friendly sarcasm, never needy
+- Slight flirt, never creepy
+- Reads the room well
 
 Rules:
 1. Max 2 short sentences.
-2. Use jasmin’s name naturally when possible.
-3. Flirting must be indirect and playful.
-4. No paragraphs, no robotic tone.
-5. Use only emojis: 🫣😹😏😌😒🫠🧑‍🦯👊
-6. Understand misspellings, slang, and mixed languages.
-7. If the message is Malayalam or mixed Malayalam-English, understand it but reply in English.
-8. Only suggest games if chat feels dry.
-9. Keep replies mobile-friendly and human.
+2. Never paragraphs.
+3. Never repeat greetings.
+4. Use ONLY these emojis: 🫣😹😏😌😒🫠🧑‍🦯👊
+5. Use Abhinav's name naturally when possible.
+6. If user writes Malayalam or mixed language, understand it and reply in English.
+7. Ignore spelling mistakes and slang.
+8. If chat feels dry, suggest a game casually.
+9. Never explain rules unless asked.
+10. Replies must feel human, not AI.
 """
 
 # =========================
-# AI Call (with fallback)
+# AI CALL WITH FALLBACK
 # =========================
-def call_model(model, messages):
+def call_ai(model, messages):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -67,108 +74,104 @@ def call_model(model, messages):
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": 0.7
+        "temperature": 0.8
     }
     r = requests.post(url, headers=headers, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
 
-
-def get_ai_reply(user_message, memory):
+def get_ai_reply(user_message, username):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    if memory:
+    if conversation_memory[username]:
         messages.append({
             "role": "system",
-            "content": "Conversation summary: " + " | ".join(memory)
+            "content": "Conversation memory: " + " | ".join(conversation_memory[username])
         })
 
     messages.append({"role": "user", "content": user_message})
 
     try:
-        return call_model(PRIMARY_MODEL, messages)
-    except Exception:
-        return call_model(FALLBACK_MODEL, messages)
+        return call_ai(PRIMARY_MODEL, messages)
+    except:
+        return call_ai(FALLBACK_MODEL, messages)
 
 # =========================
-# Games
+# GAME LOGIC
 # =========================
-def start_number_game(username):
-    number = random.randint(1, 10)
-    active_games[username] = number
-    return "Alright jasmin, guess a number between 1 and 10 😏"
+def handle_game(username, message):
+    if username not in active_games:
+        return None
 
-
-def handle_number_game(username, message):
     try:
         guess = int(message.strip())
-    except ValueError:
-        return "Just a number, jasmin 😹"
+    except:
+        return "Just a number, vroo 😹"
 
-    number = active_games.get(username)
-    if guess == number:
+    target = active_games[username]
+
+    if guess == target:
         del active_games[username]
-        return "Correct… okay that was impressive 😌👊"
-    elif guess < number:
-        return "Too low, jasmin 😏"
+        return "Boom 😏 You got it. Lucky or smart?"
+    elif guess < target:
+        return "Higher 😌"
     else:
-        return "Too high… confidence though 😹"
+        return "Lower 😹"
 
 # =========================
-# Webhook
+# WEBHOOK
 # =========================
 @app.route("/", methods=["POST"])
-def chatwoot_ai_bot():
+def chatwoot_bot():
     data = request.json
 
     if data.get("message_type") != "incoming":
         return "OK", 200
 
     message = data.get("content", "").strip()
+    sender = data.get("sender", {})
+    username = sender.get("name")
+
+    if username not in ALLOWED_USERNAMES or not message:
+        return "OK", 200
+
     conversation = data.get("conversation")
-    sender = data.get("sender")
-    username = sender.get("name") if sender else None
-
-    if not username or username not in ALLOWED_USERNAMES:
-        return "OK", 200
-
-    if not message or not conversation:
-        return "OK", 200
-
     conversation_id = conversation["id"]
 
     # Store memory
     conversation_memory[username].append(message)
 
-    # Active game handling
-    if username in active_games:
-        reply = handle_number_game(username, message)
-        send_message(conversation_id, reply)
+    # GAME ACTIVE?
+    game_reply = handle_game(username, message)
+    if game_reply:
+        send_message(conversation_id, game_reply)
         return "OK", 200
 
-    # Generate reply
+    # Personality drift (slowly gets flirtier)
+    personality_level[username] = min(personality_level[username] + 1, 5)
+
     try:
-        reply = get_ai_reply(message, conversation_memory[username])
-    except Exception:
-        reply = "Something slipped there… continue 😌"
+        ai_reply = get_ai_reply(message, username)
+    except:
+        ai_reply = "Hmm… try again 😌"
 
-    # Smart boredom detection
-    boring_inputs = {"ok", "hmm", "idk", "lol", "fine", "🙂"}
-    now = time.time()
+    reply = ai_reply
 
-    if message.lower() in boring_inputs and now - last_game_offer[username] > GAME_COOLDOWN:
-        reply += "\n\nWanna play a quick guessing game, jasmin? 😏"
-        last_game_offer[username] = now
+    # Detect boredom
+    boredom = message.lower() in {"ok", "hmm", "idk", "fine", "nothing", "lol"}
 
-    # Start game trigger
-    if "guess" in message.lower() and now - last_game_offer[username] < 60:
-        reply = start_number_game(username)
+    if boredom:
+        now = time.time()
+        if now - last_game_offer[username] > GAME_COOLDOWN:
+            active_games[username] = random.randint(1, 10)
+            reply += "\n\nQuick game, huh? Guess 1–10 😏"
+            last_game_offer[username] = now
 
     send_message(conversation_id, reply)
     return "OK", 200
 
 # =========================
-# Send Message
+# SEND MESSAGE
 # =========================
 def send_message(conversation_id, content):
     url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations/{conversation_id}/messages"
@@ -177,11 +180,11 @@ def send_message(conversation_id, content):
     requests.post(url, headers=headers, json=payload)
 
 # =========================
-# Health
+# HEALTH
 # =========================
 @app.route("/", methods=["GET"])
 def health():
-    return "Bot alive 🚀"
+    return "Bot alive 😏"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
