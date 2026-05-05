@@ -25,7 +25,7 @@ FALLBACK_MODEL = "deepseek/deepseek-chat"
 # =========================
 # Allowed Users
 # =========================
-ALLOWED_USERNAMES = {"Radhin³³", "✈︎"}
+ALLOWED_USERNAMES = none
 
 # =========================
 # Memory & State
@@ -132,7 +132,7 @@ def chatwoot_bot():
     sender = data.get("sender", {})
     username = sender.get("name")
 
-    if username not in ALLOWED_USERNAMES or not message:
+    if ALLOWED_USERNAMES and username not in ALLOWED_USERNAMES:
         return "OK", 200
 
     conversation = data.get("conversation")
