@@ -25,7 +25,7 @@ FALLBACK_MODEL = "deepseek/deepseek-chat"
 # =========================
 # Allowed Users
 # =========================
-ALLOWED_USERNAMES = none
+ALLOWED_USERNAMES = None
 
 # =========================
 # Memory & State
